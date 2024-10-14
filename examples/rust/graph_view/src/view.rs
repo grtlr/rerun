@@ -134,43 +134,25 @@ impl SpaceViewClass for GraphSpaceView {
         let (id, clip_rect_window) = ui.allocate_space(ui.available_size());
         state.clip_rect_window = clip_rect_window;
 
-        let Some(layout) = &mut state.layout else {
-            let node_sizes = ui::measure_node_sizes(ui, graph.all_nodes());
+        // TODO(grtlr): Consider putting the layout in a option to better signal intent
+            let initial_layout = state.layout.empty();
 
-            let undirected = undirected_system
-                .data
-                .iter()
-                .flat_map(|d| d.edges().map(|e| (e.source.into(), e.target.into())));
+                state.layout.select(graph.all_nodes().map(|n| n.into()));
 
-            let directed = directed_system
-                .data
-                .iter()
-                .flat_map(|d| d.edges().map(|e| (e.source.into(), e.target.into())));
+            // let layout =
+            //     state
+            //         .layout_provider
+            //         .compute(node_sizes.into_iter(), undirected, directed)?;
 
-            let layout =
-                state
-                    .layout_provider
-                    .compute(node_sizes.into_iter(), undirected, directed)?;
+            // TODO(grtlr): Do this at the end of the layout computation.
 
-            if let Some(bounding_box) = ui::bounding_rect_from_iter(layout.values()) {
-                state.fit_to_screen(
-                    bounding_box.scale_from_center(1.05),
-                    clip_rect_window.size(),
-                );
-            }
+            // if let Some(bounding_box) = ui::bounding_rect_from_iter(layout.values()) {
+            //     state.fit_to_screen(
+            //         bounding_box.scale_from_center(1.05),
+            //         clip_rect_window.size(),
+            //     );
+            // }
 
-            state.layout = Some(layout);
-
-            return Ok(());
-        };
-
-        if graph
-            .all_nodes()
-            .any(|n| !layout.contains_key(&NodeIndex::from(&n)))
-        {
-            state.layout = None;
-            return Ok(());
-        }
 
         let response = ui.interact(clip_rect_window, id, egui::Sense::click_and_drag());
 
@@ -235,7 +217,7 @@ impl SpaceViewClass for GraphSpaceView {
                 egui::Stroke::new(2.0, egui::Color32::GREEN),
             );
 
-            if let Some(bounding_box) = ui::bounding_rect_from_iter(layout.values()) {
+            if let Some(bounding_box) = state.layout.bounding_box() {
                 painter.rect(
                     bounding_box,
                     0.0,
@@ -252,7 +234,7 @@ impl SpaceViewClass for GraphSpaceView {
 
             for node in data.nodes() {
                 let index = NodeIndex::from(&node);
-                let Some(current_extent) = layout.get(&index) else {
+                let Some(current_extent) = state.layout.get(&index) else {
                     return Err(Error::MissingLayoutInformation(
                         data.entity_path.clone(),
                         node.node_id.clone(),
@@ -276,7 +258,7 @@ impl SpaceViewClass for GraphSpaceView {
                     Item::DataResult(query.space_view_id, instance),
                 );
 
-                layout.insert(index, response.rect);
+                state.layout.update(index, response.rect);
                 entity_rect =
                     entity_rect.map_or(Some(response.rect), |e| Some(e.union(response.rect)));
 
@@ -306,7 +288,7 @@ impl SpaceViewClass for GraphSpaceView {
 
         for dummy in graph.unknown_nodes() {
             let index = NodeIndex::from(&dummy);
-            let current_extent = layout
+            let current_extent = state.layout
                 .get(&index)
                 .expect("missing layout information for dummy node");
             let response = egui::Area::new(id.with(&index))
@@ -319,7 +301,7 @@ impl SpaceViewClass for GraphSpaceView {
                 })
                 .response;
 
-            layout.insert(index, response.rect);
+            state.layout.update(index, response.rect);
 
             let id = response.layer_id;
             ui.ctx().set_transform_layer(id, world_to_window);
@@ -332,10 +314,10 @@ impl SpaceViewClass for GraphSpaceView {
             for edge in data.edges() {
                 let source_ix = NodeIndex::from(edge.source);
                 let target_ix = NodeIndex::from(edge.target);
-                let source_pos = layout
+                let source_pos = state.layout
                     .get(&source_ix)
                     .ok_or_else(|| Error::EdgeUnknownNode(edge.source.to_string()))?;
-                let target_pos = layout
+                let target_pos = state.layout
                     .get(&target_ix)
                     .ok_or_else(|| Error::EdgeUnknownNode(edge.target.to_string()))?;
 
@@ -369,10 +351,10 @@ impl SpaceViewClass for GraphSpaceView {
             for edge in data.edges() {
                 let source_ix = NodeIndex::from(edge.source);
                 let target_ix = NodeIndex::from(edge.target);
-                let source_pos = layout
+                let source_pos = state.layout
                     .get(&source_ix)
                     .ok_or_else(|| Error::EdgeUnknownNode(edge.source.to_string()))?;
-                let target_pos = layout
+                let target_pos = state.layout
                     .get(&target_ix)
                     .ok_or_else(|| Error::EdgeUnknownNode(edge.target.to_string()))?;
 
@@ -399,6 +381,18 @@ impl SpaceViewClass for GraphSpaceView {
                 ui.ctx().set_sublayer(window_layer, id);
             }
         }
+
+         let undirected = undirected_system
+                .data
+                .iter()
+                .flat_map(|d| d.edges().map(|e| (NodeIndex::from(e.source), NodeIndex::from(e.target))));
+
+            let directed = directed_system
+                .data
+                .iter()
+                .flat_map(|d| d.edges().map(|e| (NodeIndex::from(e.source), NodeIndex::from(e.target))));
+
+        state.layout.compute(&mut state.layout_provider, directed, undirected)?;
 
         Ok(())
     }

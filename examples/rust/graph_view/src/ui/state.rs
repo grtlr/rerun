@@ -7,9 +7,11 @@ use re_viewer::external::{
     re_viewer_context::SpaceViewState,
 };
 
-use crate::{layout::LayoutProvider, types::NodeIndex};
-
-use super::bounding_rect_from_iter;
+use crate::{
+    error::Error,
+    layout::{DotLayout, ForceBasedLayout, FruchtermanReingoldLayout, Layout, LayoutProvider},
+    types::NodeIndex,
+};
 
 /// Space view state for the custom space view.
 ///
@@ -22,7 +24,7 @@ pub(crate) struct GraphSpaceViewState {
     pub show_debug: bool,
 
     /// Positions of the nodes in world space.
-    pub layout: Option<HashMap<NodeIndex, egui::Rect>>,
+    pub layout: Layout,
     pub layout_provider: LayoutProvider,
 }
 
@@ -58,28 +60,27 @@ impl GraphSpaceViewState {
     }
 
     pub fn bounding_box_ui(&mut self, ui: &mut egui::Ui) {
-        if let Some(layout) = &self.layout {
-            ui.grid_left_hand_label("Bounding box")
-                .on_hover_text("The bounding box encompassing all Entities in the view right now");
-            ui.vertical(|ui| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                if let Some(egui::Rect { min, max }) = bounding_rect_from_iter(layout.values()) {
-                    ui.label(format!("x [{} - {}]", format_f32(min.x), format_f32(max.x),));
-                    ui.label(format!("y [{} - {}]", format_f32(min.y), format_f32(max.y),));
-                }
-            });
-            ui.end_row();
-            if ui
-                .button("Fit to screen")
-                .on_hover_text("Fit the bounding box to the screen")
-                .clicked()
-            {
-                if let Some(bounding_rect) = bounding_rect_from_iter(layout.values()) {
-                    self.fit_to_screen(bounding_rect, self.clip_rect_window.size());
-                }
+        let layout = &self.layout;
+        ui.grid_left_hand_label("Bounding box")
+            .on_hover_text("The bounding box encompassing all Entities in the view right now");
+        ui.vertical(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            if let Some(egui::Rect { min, max }) = layout.bounding_box() {
+                ui.label(format!("x [{} - {}]", format_f32(min.x), format_f32(max.x),));
+                ui.label(format!("y [{} - {}]", format_f32(min.y), format_f32(max.y),));
             }
-            ui.end_row();
+        });
+        ui.end_row();
+        if ui
+            .button("Fit to screen")
+            .on_hover_text("Fit the bounding box to the screen")
+            .clicked()
+        {
+            if let Some(bounding_rect) = layout.bounding_box() {
+                self.fit_to_screen(bounding_rect, self.clip_rect_window.size());
+            }
         }
+        ui.end_row();
     }
 
     pub fn debug_ui(&mut self, ui: &mut egui::Ui) {
@@ -103,7 +104,7 @@ impl GraphSpaceViewState {
 
             for (l, t) in layout_options {
                 if ui.re_radio_value(&mut self.layout_provider, l, t).changed() {
-                    self.layout = None
+                    self.layout = Default::default()
                 };
             }
         });

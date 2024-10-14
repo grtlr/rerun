@@ -10,7 +10,7 @@ impl<'a> EdgeInstance<'a> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct NodeIndex {
     pub entity_hash: EntityPathHash,
     pub node_id: datatypes::GraphNodeId,

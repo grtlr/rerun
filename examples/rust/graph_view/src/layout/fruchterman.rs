@@ -6,53 +6,64 @@ use re_viewer::external::egui;
 
 use crate::{error::Error, types::NodeIndex};
 
-use super::Layout;
+#[derive(Debug, Default)]
+pub struct FruchtermanReingoldLayout {
+    node_force: fdg::fruchterman_reingold::FruchtermanReingold<f32, 2>,
+    center_force: fdg::simple::Center,
+    graph: fdg::ForceGraph<f32, 2, (NodeIndex, egui::Vec2), ()>,
+    node_to_index: HashMap<NodeIndex, petgraph::prelude::NodeIndex>,
+}
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct FruchtermanReingoldLayout;
+impl FruchtermanReingoldLayout {
+    pub fn compute(
+        &mut self,
+        nodes: impl IntoIterator<Item = (NodeIndex, egui::Vec2)>,
+        directed: impl IntoIterator<Item = (NodeIndex, NodeIndex)>,
+        undirected: impl IntoIterator<Item = (NodeIndex, NodeIndex)>,
+    ) -> Result<HashMap<NodeIndex, egui::Rect>, Error> {
 
-impl Layout for FruchtermanReingoldLayout {
-    type NodeIx = NodeIndex;
+        // TODO(grtlr): This should not be initialized on every compute iteration.
+        let dist = fdg::rand_distributions::Uniform::new(-10.0, 10.0);
 
-    fn compute(
-        &self,
-        nodes: impl IntoIterator<Item = (Self::NodeIx, egui::Vec2)>,
-        directed: impl IntoIterator<Item = (Self::NodeIx, Self::NodeIx)>,
-        undirected: impl IntoIterator<Item = (Self::NodeIx, Self::NodeIx)>,
-    ) -> Result<HashMap<Self::NodeIx, egui::Rect>, Error> {
-        let mut node_to_index = HashMap::new();
-        let mut graph: fdg::ForceGraph<f32, 2, (Self::NodeIx, egui::Vec2), ()> =
-            fdg::ForceGraph::default();
+        let new_nodes = nodes.into_iter().collect::<HashMap<_, _>>();
 
-        for (node_id, size) in nodes {
-            let dist = fdg::rand_distributions::Uniform::new(-10.0, 10.0);
-
-            let ix = graph.add_node((
-                (node_id.clone(), size),
-                Point2::new(
-                    dist.sample(&mut rand::thread_rng()),
-                    dist.sample(&mut rand::thread_rng()),
-                ),
-            ));
-            node_to_index.insert(node_id, ix);
+        for (node_id, ix) in self.node_to_index {
+            if !new_nodes.contains_key(&node_id) {
+                self.graph.remove_node(ix);
+                self.node_to_index.remove(&node_id);
+            }
         }
 
+        for (node_id, size) in new_nodes {
+            self.node_to_index.entry(node_id.clone()).or_insert_with(|| {
+                self.graph.add_node((
+                    (node_id.clone(), size),
+                    Point2::new(
+                        dist.sample(&mut rand::thread_rng()),
+                        dist.sample(&mut rand::thread_rng()),
+                    ),
+                ))
+            });
+        }
+
+        // We rebuild the list of edges for every iteration because they don't hold any state.
+        self.graph.clear_edges();
         for (source, target) in directed.into_iter().chain(undirected) {
-            let source_ix = node_to_index
+            let source_ix = self.node_to_index
                 .get(&source)
                 .ok_or_else(|| Error::EdgeUnknownNode(source.to_string()))?;
-            let target_ix = node_to_index
+            let target_ix = self.node_to_index
                 .get(&target)
                 .ok_or_else(|| Error::EdgeUnknownNode(source.to_string()))?;
-            graph.add_edge(*source_ix, *target_ix, ());
+            self.graph.add_edge(*source_ix, *target_ix, ());
         }
 
-        // create a simulation from the graph
-        fdg::fruchterman_reingold::FruchtermanReingold::default().apply_many(&mut graph, 1000);
-        // Center the graph's average around (0,0).
-        fdg::simple::Center::default().apply(&mut graph);
+        // TODO(grtlr): This is incorrect because it makes the forces frame dependent. Ideally we would have a `dt` parameter.
+        self.node_force.apply_many(&mut self.graph, 1);
+        self.center_force.apply(&mut self.graph);
 
-        let res = graph
+        let res = self
+            .graph
             .node_weights()
             .map(|(data, pos)| {
                 let (ix, size) = data;
